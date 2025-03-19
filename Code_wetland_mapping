@@ -1,0 +1,83 @@
+
+// Import administrative boundaries dataset
+var gaulDataset = ee.FeatureCollection("FAO/GAUL/2015/level2");
+
+// Filter the dataset to get only Sunamganj
+var roi = gaulDataset.filter(ee.Filter.eq('ADM2_NAME', 'Sunamganj'));
+
+// Zoom to area of interest
+Map.centerObject(roi);
+Map.addLayer(roi, {}, 'Region of Interest');
+
+// Function to get Sentinel-2 median composite for a given year
+function getSentinelComposite(year) {
+    var startDate = year + '-01-01';
+    var endDate = year + '-12-31';
+    
+    return ee.ImageCollection('COPERNICUS/S2')
+        .filterBounds(roi)
+        .filterDate(startDate, endDate)
+        .filter(ee.Filter.lt('CLOUDY_PIXEL_PERCENTAGE', 10))
+        .median()
+        .clip(roi);
+}
+
+// Get composites for 2015 and 2020
+var sentinel2015 = getSentinelComposite(2015);
+var sentinel2020 = getSentinelComposite(2020);
+
+// Visualize using RGB
+Map.addLayer(sentinel2015, {min: 0.0, max: 2000, bands: ['B4', 'B3', 'B2']}, 'RGB 2015');
+Map.addLayer(sentinel2020, {min: 0.0, max: 2000, bands: ['B4', 'B3', 'B2']}, 'RGB 2020');
+
+// Calculate NDWI for both years
+var ndwi2015 = sentinel2015.normalizedDifference(['B3', 'B8']).rename('NDWI');
+var ndwi2020 = sentinel2020.normalizedDifference(['B3', 'B8']).rename('NDWI');
+
+Map.addLayer(ndwi2015, {palette: ['red', 'yellow', 'green', 'cyan', 'blue']}, 'NDWI 2015');
+Map.addLayer(ndwi2020, {palette: ['red', 'yellow', 'green', 'cyan', 'blue']}, 'NDWI 2020');
+
+// Create NDWI masks
+var ndwiMask2015 = ndwi2015.gte(0.0);
+var ndwiMask2020 = ndwi2020.gte(0.0);
+
+Map.addLayer(ndwiMask2015.updateMask(ndwiMask2015), {palette:['blue']}, 'NDWI Mask 2015');
+Map.addLayer(ndwiMask2020.updateMask(ndwiMask2020), {palette:['yellow']}, 'NDWI Mask 2020');
+
+// Compute water change classification
+var waterLoss = ndwiMask2015.subtract(ndwiMask2020).eq(1);
+var waterGain = ndwiMask2020.subtract(ndwiMask2015).eq(1);
+var waterUnchanged = ndwiMask2020.and(ndwiMask2015);
+
+
+
+Map.addLayer(waterLoss.updateMask(waterLoss), {palette: ['red']}, 'Water Loss (2015-2020)');
+Map.addLayer(waterGain.updateMask(waterGain), {palette: ['green']}, 'Water Gain (2015-2020)');
+Map.addLayer(waterUnchanged.updateMask(waterUnchanged), {palette: 'blue'}, 'Water Unchanged 2015-2020');
+
+// Calculate the area of the region of interest
+var aoiArea = ee.Image.pixelArea().divide(1e6).reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: roi,
+    scale: 10,
+    bestEffort: true
+}).get('area');
+print('AOI area (km2):', aoiArea);
+
+// Calculate the NDWI water area for both years
+function getWaterArea(ndwiMask) {
+    return ee.Image.pixelArea().updateMask(ndwiMask).divide(1e6).reduceRegion({
+        reducer: ee.Reducer.sum(),
+        geometry: roi,
+        scale: 10,
+        bestEffort: true
+    }).get('area');
+}
+
+var waterArea2015 = getWaterArea(ndwiMask2015);
+var waterArea2020 = getWaterArea(ndwiMask2020);
+
+print("Water area 2015 (km2):", waterArea2015);
+print("Water area 2020 (km2):", waterArea2020);
+
+
